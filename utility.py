@@ -4,6 +4,7 @@ from io import BytesIO
 from Crypto.Cipher import PKCS1_v1_5 as Cipher_pksc1_v1_5
 from Crypto.PublicKey import RSA
 from PIL import Image
+
 from ddddocr import DdddOcr
 
 
@@ -15,45 +16,61 @@ def encrypt(t):
     return cipher_text.decode()
 
 
-ocr = DdddOcr()
+def md5(s):
+    import hashlib
+    m = hashlib.md5()
+    m.update(s.encode())
+    return m.hexdigest()
+
+
 def cap_recognize(cap):
-    return ocr.classification(denoise(cap))
+    return DdddOcr().classification(denoise(cap))
 
 
 def denoise(cap):
     img = Image.open(BytesIO(cap))
-    _STEPS_LAYER_1 = ((1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1))
-    STEPS8 = _STEPS_LAYER_1
-    _PX_WHITE = (250, 250, 250)
+    steps = ((1, 1), (1, 0), (1, -1), (0, 1), (0, -1), (-1, 1), (-1, 0), (-1, -1))
+    _PX_BACKGROUND = (250, 250, 250)
+    _PX_TARGET = (250, 0, 0)
+    threshold, repeat = 7, 2
 
-    def _denoise(img, steps, threshold, repeat):
-        for _ in range(repeat):
-            for j in range(img.width):
-                for i in range(img.height):
-                    px = img.getpixel((j, i))
-                    if px == _PX_WHITE:  # 自身白
-                        continue
-                    count = 0
-                    if px[0] < px[1] + px[2]:
-                        count = 2
-                    for x, y in steps:
-                        j2 = j + y
-                        i2 = i + x
-                        if 0 <= j2 < img.width and 0 <= i2 < img.height:  # 边界内
-                            if img.getpixel((j2, i2)) == _PX_WHITE:  # 周围白
-                                count += 1
-                        else:  # 边界外全部视为黑
+    for _ in range(repeat):
+        for j in range(img.width):
+            for i in range(img.height):
+                px = img.getpixel((j, i))
+                if px == _PX_BACKGROUND:
+                    continue
+                count = 0
+                if px[0] < px[1] + px[2]:
+                    count = 2
+                for x, y in steps:
+                    if 0 <= j + x < img.width and 0 <= i + y < img.height:
+                        if img.getpixel((j + x, i + y)) == _PX_BACKGROUND:
                             count += 1
-                    if count >= threshold:
-                        img.putpixel((j, i), _PX_WHITE)
-
-        return img
-
-    def denoise8(img, steps=STEPS8, threshold=7, repeat=2):
-        """ 考虑外一周的降噪 """
-        return _denoise(img, steps, threshold, repeat)
+                if count >= threshold:
+                    img.putpixel((j, i), _PX_BACKGROUND)
+                else:
+                    img.putpixel((j, i), _PX_TARGET)
 
     buf = BytesIO()
-    denoise8(img).save(buf, format='PNG')
-    byte_im = buf.getvalue()
-    return byte_im
+    img.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+if __name__ == '__main__':
+    import requests
+    import re
+
+    bjySession = requests.session()
+    bjySession.timeout = 5  # set session timeout
+    touch = bjySession.get(url="https://m.bjyouth.net/site/login")
+    capUrl = "https://m.bjyouth.net" + re.findall(
+        r'src="(/site/captcha.+)" alt=', touch.text)[0]
+    cap1 = bjySession.get(url=capUrl).content
+    cap2 = denoise(cap1)
+
+    img = Image.open(BytesIO(cap1))
+    img.show()
+
+    img = Image.open(BytesIO(cap2))
+    img.show()
